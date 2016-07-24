@@ -3,23 +3,45 @@ package main
 import (
 	"fmt"
 	"github.com/jkrecek/recbuilder/template"
-	"io/ioutil"
 	"log"
 	"os"
 	"regexp"
-	"strings"
+
+	_ "github.com/jkrecek/mysql"
 )
 
 const (
-	ARG_REGEX_STR        = "^--([a-z-]*)(?:=(.*))?$"
-	FROM_TABLE_REGEX_STR = "(^|_)([a-z])"
+	ARG_REGEX_STR            = "^--([a-z-\\_]*)(?:=(.*))?$"
+	UNDERSCORE_SEP_REGEX_STR = "_([a-z])"
+	SQL_VALUE_TYPE_REGEX_STR = "^[a-z]+"
+	HELP                     = `Tool for fast creating of repository+entity+collection structure.
+
+Availible parameters:
+	--help				Shows this table.
+	--root=VALUE		Specifies in under which namespace should rec stack be created.
+						Required.
+						eg.: --root=App\Module\Repository
+	--table=VALUE		Specifies for which table should structure be created.
+						Required, unless specified --entire_database.
+						eg.: --table=page_category
+	--entire_database	Create structure for entire database.
+						Required, unless specified --table=VALUE.
+	--dsn				Database source name for connecting to SQL database. Creates Entity Structure when specified.
+						eg.: --dsn=root:root@tcp(localhost:3306)/page_database
+
+Examples:
+	recbuilder --root=App\Model\Repository --dsn=root:usbw@tcp(localhost:3306)/zpmvcr --entire_database
+						Creates structure for entire database.
+	recbuilder --root=App\Model\Repository --table=page_category
+						Creates structure only for table 'page_category'
+	`
 )
 
 var (
-	argumentRegex  = regexp.MustCompile(ARG_REGEX_STR)
-	fromTableRegex = regexp.MustCompile(FROM_TABLE_REGEX_STR)
-	variableMap    = make(map[string]string)
-	sourceFileMap  = map[string]string{
+	argumentRegex        = regexp.MustCompile(ARG_REGEX_STR)
+	underscoreSepRegex   = regexp.MustCompile(UNDERSCORE_SEP_REGEX_STR)
+	sqlValueTypeRegexStr = regexp.MustCompile(SQL_VALUE_TYPE_REGEX_STR)
+	sourceFileMap        = map[string]string{
 		"{{REPOSITORY_NAME}}.php":       template.REPOSITORY_CODE,
 		"{{COLLECTION_NAME}}.php":       template.COLLECTION_CODE,
 		"{{ENTITY_NAME}}.php":           template.ENTITY_CODE,
@@ -28,47 +50,60 @@ var (
 )
 
 func main() {
-	tableName := getExecuteArgumentValue("table")
-	root := getExecuteArgumentValue("root")
-
-	if len(tableName) == 0 || len(root) == 0 {
-		log.Println("You must specify --table and --root parameter.")
-		os.Exit(1)
+	isHelp, _ := getExecuteArgumentValue("help")
+	if isHelp {
+		printHelp()
+		return
 	}
 
-	setVariables(tableName, root)
-
-	outputFileMap := make(map[string]string)
-	for fileName, fileContent := range sourceFileMap {
-		outputFileMap[customize(fileName)] = customize(fileContent)
+	rootFound, root := getExecuteArgumentValue("root")
+	if !rootFound || len(root) == 0 {
+		onError("You must specify --root parameter.")
 	}
 
-	os.Mkdir(tableName, 0755)
-	for outFile, outContent := range outputFileMap {
-		ioutil.WriteFile(tableName+"/"+outFile, []byte(outContent), 0644)
+	_, tableName := getExecuteArgumentValue("table")
+
+	_, dsn := getExecuteArgumentValue("dsn")
+	entireDatabase, _ := getExecuteArgumentValue("entire_database")
+
+	if entireDatabase && len(dsn) == 0 {
+		onError("If you run with --entire_database dsn parameter is required.")
+	}
+
+	if len(tableName) == 0 && (!entireDatabase || len(dsn) == 0) {
+		onError("You must either specify --table parameter or run with --entire_database.")
+	}
+
+	var db *database
+	var tableNames []string
+	if len(tableName) == 0 {
+		db = &database{dsn: dsn}
+		err := db.connect()
+		if err != nil {
+			onError(err)
+		}
+
+		tableNames = db.loadTables()
+	} else {
+		tableNames = []string{tableName}
+	}
+
+	for _, tblName := range tableNames {
+		tbl := table{
+			tableName:     tblName,
+			rootNameSpace: root,
+			db:            db,
+		}
+		tbl.process()
 	}
 }
 
-func setVariables(tableName, root string) {
-	entityBase := fromTableRegex.ReplaceAllStringFunc(tableName, func(matches string) string {
-		lastChar := matches[len(matches)-1]
-		return strings.ToUpper(string(lastChar))
-	})
-
-	readable := strings.Replace(tableName, "_", " ", -1)
-	readable = strings.ToUpper(string(readable[0])) + readable[1:]
-
-	variableMap["NAMESPACE"] = strings.Trim(root, "\\") + "\\" + entityBase
-	variableMap["READABLE_NAME"] = readable
-
-	variableMap["TABLE_NAME"] = tableName
-	variableMap["REPOSITORY_NAME"] = entityBase + "Repository"
-	variableMap["COLLECTION_NAME"] = entityBase + "Collection"
-	variableMap["ENTITY_NAME"] = entityBase + "Entity"
-	variableMap["ENTITY_STRUCTURE_NAME"] = entityBase + "EntityStructure"
+func onError(v interface{}) {
+	log.Println(v)
+	os.Exit(1)
 }
 
-func getExecuteArgumentValue(argument string) string {
+func getExecuteArgumentValue(argument string) (bool, string) {
 	for _, osArg := range os.Args[1:] {
 		subMatch := argumentRegex.FindStringSubmatch(osArg)
 		if len(subMatch) == 0 {
@@ -76,17 +111,13 @@ func getExecuteArgumentValue(argument string) string {
 		}
 
 		if argument == subMatch[1] {
-			return subMatch[2]
+			return true, subMatch[2]
 		}
 	}
 
-	return ""
+	return false, ""
 }
 
-func customize(str string) string {
-	for old, new := range variableMap {
-		str = strings.Replace(str, fmt.Sprintf("{{%s}}", old), new, -1)
-	}
-
-	return str
+func printHelp() {
+	fmt.Print(HELP)
 }

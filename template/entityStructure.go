@@ -12,6 +12,6 @@ use Nette\Utils\DateTime;
 
 trait {{ENTITY_STRUCTURE_NAME}}
 {
-
+	{{ENTITY_VALUES}}
 }
 `
