@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	_ "github.com/jkrecek/mysql"
+	"strings"
 )
 
 const (
@@ -42,10 +43,10 @@ var (
 	underscoreSepRegex   = regexp.MustCompile(UNDERSCORE_SEP_REGEX_STR)
 	sqlValueTypeRegexStr = regexp.MustCompile(SQL_VALUE_TYPE_REGEX_STR)
 	sourceFileMap        = map[string]string{
-		"{{REPOSITORY_NAME}}.php":       template.REPOSITORY_CODE,
-		"{{COLLECTION_NAME}}.php":       template.COLLECTION_CODE,
-		"{{ENTITY_NAME}}.php":           template.ENTITY_CODE,
-		"{{ENTITY_STRUCTURE_NAME}}.php": template.ENTITY_STRUCTURE_CODE,
+		"{{REPOSITORY_NAME}}.php":       strings.TrimSpace(template.REPOSITORY_CODE),
+		"{{COLLECTION_NAME}}.php":       strings.TrimSpace(template.COLLECTION_CODE),
+		"{{ENTITY_NAME}}.php":           strings.TrimSpace(template.ENTITY_CODE),
+		"{{ENTITY_STRUCTURE_NAME}}.php": strings.TrimSpace(template.ENTITY_STRUCTURE_CODE),
 	}
 )
 
@@ -70,19 +71,21 @@ func main() {
 		onError("If you run with --entire_database dsn parameter is required.")
 	}
 
-	if len(tableName) == 0 && (!entireDatabase || len(dsn) == 0) {
+	if len(tableName) == 0 && !entireDatabase {
 		onError("You must either specify --table parameter or run with --entire_database.")
 	}
 
 	var db *database
 	var tableNames []string
-	if len(tableName) == 0 {
+	if len(dsn) != 0 {
 		db = &database{dsn: dsn}
 		err := db.connect()
 		if err != nil {
 			onError(err)
 		}
+	}
 
+	if len(tableName) == 0 {
 		tableNames = db.loadTables()
 	} else {
 		tableNames = []string{tableName}
